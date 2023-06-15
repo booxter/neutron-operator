@@ -6,7 +6,6 @@ import (
 
 // InitContainer information
 type InitContainer struct {
-	Privileged           bool
 	ContainerImage       string
 	Database             string
 	DatabaseHost         string
@@ -20,16 +19,6 @@ type InitContainer struct {
 
 // GetInitContainer - init container for neutron services
 func GetInitContainer(init InitContainer) []corev1.Container {
-	runAsUser := int64(0)
-	trueVar := true
-
-	securityContext := &corev1.SecurityContext{
-		RunAsUser: &runAsUser,
-	}
-	if init.Privileged {
-		securityContext.Privileged = &trueVar
-	}
-
 	envs := []corev1.EnvVar{
 		{
 			Name:  "DatabaseHost",
@@ -84,9 +73,8 @@ func GetInitContainer(init InitContainer) []corev1.Container {
 
 	return []corev1.Container{
 		{
-			Name:            "init",
-			Image:           init.ContainerImage,
-			SecurityContext: securityContext,
+			Name:  "init",
+			Image: init.ContainerImage,
 			Command: []string{
 				"/bin/bash", "-c", "/usr/local/bin/container-scripts/init.sh",
 			},
