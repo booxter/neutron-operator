@@ -39,7 +39,7 @@ func GetInitVolumeMounts(extraVol []neutronv1beta1.NeutronExtraVolMounts, svc []
 //	mechanism.
 func GetAPIVolumes(name string, extraVol []neutronv1beta1.NeutronExtraVolMounts, svc []storage.PropagationType) []corev1.Volume {
 	var scriptsVolumeDefaultMode int32 = 0755
-	var config0644AccessMode int32 = 0644
+	var config0640AccessMode int32 = 0640
 
 	res := []corev1.Volume{
 		{
@@ -57,7 +57,7 @@ func GetAPIVolumes(name string, extraVol []neutronv1beta1.NeutronExtraVolMounts,
 			Name: "config-data",
 			VolumeSource: corev1.VolumeSource{
 				ConfigMap: &corev1.ConfigMapVolumeSource{
-					DefaultMode: &config0644AccessMode,
+					DefaultMode: &config0640AccessMode,
 					LocalObjectReference: corev1.LocalObjectReference{
 						Name: name + "-config-data",
 					},
