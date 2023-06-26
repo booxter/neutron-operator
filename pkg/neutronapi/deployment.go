@@ -152,9 +152,6 @@ func Deployment(
 		VolumeMounts:         GetInitVolumeMounts(instance.Spec.ExtraMounts, NeutronAPIPropagation),
 	}
 	deployment.Spec.Template.Spec.InitContainers = GetInitContainer(initContainerDetails)
-	deployment.Spec.Template.Spec.InitContainers[0].SecurityContext = &corev1.SecurityContext{
-		RunAsUser: &runAsUser,
-	}
 
 	return deployment
 }
