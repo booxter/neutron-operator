@@ -19,6 +19,7 @@ package controllers
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/go-logr/logr"
@@ -922,6 +923,12 @@ func (r *NeutronAPIReconciler) reconcileNormal(ctx context.Context, instance *ne
 		return ctrl.Result{}, err
 	}
 
+	err = r.reconcileExternalOVNSecrets(ctx, helper, instance, &secretVars)
+	if err != nil {
+		Log.Error(err, "Failed to reconcile external OVN Secrets")
+		return ctrl.Result{}, err
+	}
+
 	//
 	// TODO check when/if Init, Update, or Upgrade should/could be skipped
 	//
@@ -1112,12 +1119,19 @@ func getDhcpAgentSecretName(instance *neutronv1beta1.NeutronAPI) string {
 	return getExternalSecretName(instance, "dhcp-agent")
 }
 
-func (r *NeutronAPIReconciler) reconcileExternalMetadataAgentSecret(
+func (r *NeutronAPIReconciler) reconcileExternalOVNMetadataAgentSecret(
 	ctx context.Context,
 	h *helper.Helper,
 	instance *neutronv1beta1.NeutronAPI,
 	envVars *map[string]env.Setter,
 ) error {
+	if !instance.IsOVNEnabled() {
+		err := r.deleteExternalSecret(ctx, h, instance, getMetadataAgentSecretName(instance))
+		if err != nil {
+			return fmt.Errorf("failed to delete Neutron Metadata Agent external Secret: %w", err)
+		}
+		return nil
+	}
 	sbCluster, err := ovnclient.GetDBClusterByType(ctx, h, instance.Namespace, map[string]string{}, ovnclient.SBDBType)
 	if err != nil {
 		err = r.deleteExternalSecret(ctx, h, instance, getMetadataAgentSecretName(instance))
@@ -1136,7 +1150,7 @@ func (r *NeutronAPIReconciler) reconcileExternalMetadataAgentSecret(
 		return nil
 	}
 
-	err = r.ensureExternalMetadataAgentSecret(ctx, h, instance, sbEndpoint, envVars)
+	err = r.ensureExternalOVNMetadataAgentSecret(ctx, h, instance, sbEndpoint, envVars)
 	if err != nil {
 		return fmt.Errorf("failed to ensure Neutron Metadata Agent external Secret: %w", err)
 	}
@@ -1149,6 +1163,13 @@ func (r *NeutronAPIReconciler) reconcileExternalOVNAgentSecret(
 	instance *neutronv1beta1.NeutronAPI,
 	envVars *map[string]env.Setter,
 ) error {
+	if !instance.IsOVNEnabled() {
+		err := r.deleteExternalSecret(ctx, h, instance, getOVNAgentSecretName(instance))
+		if err != nil {
+			return fmt.Errorf("failed to delete Neutron OVN Agent external Secret: %w", err)
+		}
+		return nil
+	}
 	nbCluster, err := ovnclient.GetDBClusterByType(ctx, h, instance.Namespace, map[string]string{}, ovnclient.NBDBType)
 	if err != nil {
 		err = r.deleteExternalSecret(ctx, h, instance, getOVNAgentSecretName(instance))
@@ -1259,6 +1280,7 @@ func (r *NeutronAPIReconciler) reconcileExternalDhcpAgentSecret(
 }
 
 // TODO(ihar) - is there any hashing mechanism for EDP config? do we trigger deploy somehow?
+// NOTE(ihar): Add config reconciliation code for any other services here or below
 func (r *NeutronAPIReconciler) reconcileExternalSecrets(
 	ctx context.Context,
 	h *helper.Helper,
@@ -1267,15 +1289,7 @@ func (r *NeutronAPIReconciler) reconcileExternalSecrets(
 ) error {
 	Log := r.GetLogger(ctx)
 	// Generate one Secret per external service
-	err := r.reconcileExternalMetadataAgentSecret(ctx, h, instance, envVars)
-	if err != nil {
-		return fmt.Errorf("failed to reconcile Neutron Metadata Agent external Secret: %w", err)
-	}
-	err = r.reconcileExternalOVNAgentSecret(ctx, h, instance, envVars)
-	if err != nil {
-		return fmt.Errorf("failed to reconcile Neutron OVN Agent external Secret: %w", err)
-	}
-	err = r.reconcileExternalSriovAgentSecret(ctx, h, instance, envVars)
+	err := r.reconcileExternalSriovAgentSecret(ctx, h, instance, envVars)
 	if err != nil {
 		return fmt.Errorf("failed to reconcile Neutron SR-IOV Agent external Secret: %w", err)
 	}
@@ -1283,8 +1297,27 @@ func (r *NeutronAPIReconciler) reconcileExternalSecrets(
 	if err != nil {
 		return fmt.Errorf("failed to reconcile Neutron DHCP Agent external Secret: %w", err)
 	}
-	// NOTE(ihar): Add config reconciliation code for any other services here
 	Log.Info(fmt.Sprintf("Reconciled external secrets for %s", instance.Name))
+	return nil
+}
+
+func (r *NeutronAPIReconciler) reconcileExternalOVNSecrets(
+	ctx context.Context,
+	h *helper.Helper,
+	instance *neutronv1beta1.NeutronAPI,
+	envVars *map[string]env.Setter,
+) error {
+	Log := r.GetLogger(ctx)
+	// Generate one Secret per external service
+	err := r.reconcileExternalOVNMetadataAgentSecret(ctx, h, instance, envVars)
+	if err != nil {
+		return fmt.Errorf("failed to reconcile Neutron Metadata Agent external Secret: %w", err)
+	}
+	err = r.reconcileExternalOVNAgentSecret(ctx, h, instance, envVars)
+	if err != nil {
+		return fmt.Errorf("failed to reconcile Neutron OVN Agent external Secret: %w", err)
+	}
+	Log.Info(fmt.Sprintf("Reconciled external OVN secrets for %s", instance.Name))
 	return nil
 }
 
@@ -1347,7 +1380,7 @@ func (r *NeutronAPIReconciler) ensureExternalSecret(
 	return nil
 }
 
-func (r *NeutronAPIReconciler) ensureExternalMetadataAgentSecret(
+func (r *NeutronAPIReconciler) ensureExternalOVNMetadataAgentSecret(
 	ctx context.Context,
 	h *helper.Helper,
 	instance *neutronv1beta1.NeutronAPI,
@@ -1432,23 +1465,6 @@ func (r *NeutronAPIReconciler) generateServiceSecrets(
 	// Create/update secrets from templates
 	cmLabels := labels.GetLabels(instance, labels.GetGroupLabel(neutronapi.ServiceName), map[string]string{})
 
-	nbCluster, err := ovnclient.GetDBClusterByType(ctx, h, instance.Namespace, map[string]string{}, ovnclient.NBDBType)
-	if err != nil {
-		return err
-	}
-	nbEndpoint, err := nbCluster.GetInternalEndpoint()
-	if err != nil {
-		return err
-	}
-
-	sbCluster, err := ovnclient.GetDBClusterByType(ctx, h, instance.Namespace, map[string]string{}, ovnclient.SBDBType)
-	if err != nil {
-		return err
-	}
-	sbEndpoint, err := sbCluster.GetInternalEndpoint()
-	if err != nil {
-		return err
-	}
 	var tlsCfg *tls.Service
 	if instance.Spec.TLS.Ca.CaBundleSecretName != "" {
 		tlsCfg = &tls.Service{}
@@ -1514,11 +1530,33 @@ func (r *NeutronAPIReconciler) generateServiceSecrets(
 	templateParameters["DbUser"] = databaseAccount.Spec.UserName
 	templateParameters["DbPassword"] = string(dbSecret.Data[mariadbv1.DatabasePasswordSelector])
 	templateParameters["Db"] = neutronapi.Database
+	// TODO: add join func to template library?
+	templateParameters["Ml2Drivers"] = strings.Join(instance.GetMl2Drivers(), ",")
 
 	// OVN
-	templateParameters["NBConnection"] = nbEndpoint
-	templateParameters["SBConnection"] = sbEndpoint
-	templateParameters["OVNDB_TLS"] = instance.Spec.TLS.Ovn.Enabled()
+	templateParameters["IsOVN"] = instance.IsOVNEnabled()
+	if instance.IsOVNEnabled() {
+		nbCluster, err := ovnclient.GetDBClusterByType(ctx, h, instance.Namespace, map[string]string{}, ovnclient.NBDBType)
+		if err != nil {
+			return err
+		}
+		nbEndpoint, err := nbCluster.GetInternalEndpoint()
+		if err != nil {
+			return err
+		}
+
+		sbCluster, err := ovnclient.GetDBClusterByType(ctx, h, instance.Namespace, map[string]string{}, ovnclient.SBDBType)
+		if err != nil {
+			return err
+		}
+		sbEndpoint, err := sbCluster.GetInternalEndpoint()
+		if err != nil {
+			return err
+		}
+		templateParameters["NBConnection"] = nbEndpoint
+		templateParameters["SBConnection"] = sbEndpoint
+		templateParameters["OVNDB_TLS"] = instance.Spec.TLS.Ovn.Enabled()
+	}
 
 	// create httpd  vhost template parameters
 	httpdVhostConfig := map[string]interface{}{}
